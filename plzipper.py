@@ -19,6 +19,19 @@ def install_dependencies():
         'tqdm'
     ]
     
+    # 检查操作系统类型
+    import platform
+    is_windows = platform.system() == 'Windows'
+    is_amd64 = platform.architecture()[0] == '64bit'
+    
+    # 构建pip安装命令
+    def get_pip_install_command(dep):
+        cmd = [sys.executable, '-m', 'pip', 'install', dep]
+        # 仅在非Windows系统上使用 --break-system-packages 标志
+        if not is_windows:
+            cmd.append('--break-system-packages')
+        return cmd
+    
     # 检查并安装依赖
     for dep in dependencies:
         try:
@@ -27,8 +40,13 @@ def install_dependencies():
         except ImportError:
             print(f"✗ {dep} 未安装，正在安装...")
             try:
-                # 添加 --break-system-packages 标志以绕过外部管理环境限制
-                subprocess.check_call([sys.executable, '-m', 'pip', 'install', dep, '--break-system-packages'])
+                # 针对Windows amd64系统的特殊处理
+                if is_windows and is_amd64 and dep == 'pillow-heif':
+                    # 对于Windows amd64，使用特定的安装命令
+                    subprocess.check_call(get_pip_install_command('pillow-heif'))
+                else:
+                    # 其他系统使用正常安装命令
+                    subprocess.check_call(get_pip_install_command(dep))
                 print(f"✓ {dep} 安装成功")
             except Exception as e:
                 print(f"✗ 安装 {dep} 失败: {e}")
@@ -43,7 +61,7 @@ def install_dependencies():
         print("请安装ffmpeg命令行工具：")
         print("- macOS: brew install ffmpeg")
         print("- Ubuntu: apt-get install ffmpeg")
-        print("- Windows: 从官网下载并安装")
+        print("- Windows: 从官网下载并安装，或使用 winget install ffmpeg")
         return False
     
     return True
