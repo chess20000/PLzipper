@@ -146,8 +146,8 @@ def convert_video_to_h264(input_path, output_path):
             output_path
         ]
         
-        # 运行命令，不捕获输出以便查看详细错误
-        subprocess.run(cmd, check=True)
+        # 运行命令，将输出重定向到 DEVNULL 以保持进度条显示
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception as e:
         print(f"转换视频失败 {input_path}: {e}")
@@ -155,24 +155,51 @@ def convert_video_to_h264(input_path, output_path):
 
 def process_directory(input_dir, output_dir):
     """处理目录中的所有文件"""
-    # 首先计算总文件数
+    # 首先计算总文件数、分别的视频和照片数量，以及文件大小
     total_files = 0
+    total_images = 0
+    total_videos = 0
+    total_size = 0
+    image_size = 0
+    video_size = 0
     media_files = []
     
     for root, dirs, files in os.walk(input_dir):
         for file in files:
             ext = os.path.splitext(file)[1].lower()
-            if ext in IMAGE_EXTS or ext in VIDEO_EXTS:
+            input_file = os.path.join(root, file)
+            try:
+                file_size = os.path.getsize(input_file)
+            except:
+                file_size = 0
+            
+            if ext in IMAGE_EXTS:
                 total_files += 1
-                media_files.append((root, file))
+                total_images += 1
+                total_size += file_size
+                image_size += file_size
+                media_files.append((root, file, 'image', file_size))
+            elif ext in VIDEO_EXTS:
+                total_files += 1
+                total_videos += 1
+                total_size += file_size
+                video_size += file_size
+                media_files.append((root, file, 'video', file_size))
     
     processed_files = 0
+    processed_images = 0
+    processed_videos = 0
+    processed_size = 0
     failed_files = 0
     
-    # 使用tqdm创建进度条
-    with tqdm(total=total_files, desc="处理进度", unit="文件", ncols=100) as pbar:
+    # 计算平均处理速度（基于文件大小）
+    import time
+    start_time = time.time()
+    
+    # 使用tqdm创建进度条，确保原地更新
+    with tqdm(total=total_files, desc="处理进度", unit="文件", ncols=120, leave=True) as pbar:
         # 处理每个媒体文件
-        for root, file in media_files:
+        for root, file, media_type, file_size in media_files:
             # 计算相对路径
             rel_path = os.path.relpath(root, input_dir)
             if rel_path == '.':
@@ -186,24 +213,65 @@ def process_directory(input_dir, output_dir):
             output_file = os.path.join(output_subdir, file)
             ext = os.path.splitext(file)[1].lower()
             
-            if ext in IMAGE_EXTS:
+            # 处理视频时改变进度条颜色并显示提示
+            if media_type == 'video':
+                # 改变进度条颜色为蓝色
+                if pbar.colour != 'blue':
+                    pbar.colour = 'blue'
+                    # 显示处理视频的提示
+                    pbar.set_description("处理进度 (正在处理视频，用时会比照片久很多)")
+            else:
+                # 处理照片时恢复白色
+                if pbar.colour != 'white':
+                    pbar.colour = 'white'
+                    pbar.set_description("处理进度")
+            
+            # 处理文件
+            if media_type == 'image':
                 # 处理图片
                 if convert_image_to_heif(input_file, output_file):
                     processed_files += 1
+                    processed_images += 1
+                    processed_size += file_size
                 else:
                     failed_files += 1
-            elif ext in VIDEO_EXTS:
+            elif media_type == 'video':
                 # 处理视频
                 if convert_video_to_h264(input_file, output_file):
                     processed_files += 1
+                    processed_videos += 1
+                    processed_size += file_size
                 else:
                     failed_files += 1
             
-            # 更新进度条
-            pbar.set_postfix_str(f"已处理: {processed_files}/{total_files}")
+            # 计算剩余时间
+            elapsed_time = time.time() - start_time
+            if processed_size > 0:
+                # 基于已处理的大小和时间，估算剩余时间
+                processing_rate = processed_size / elapsed_time
+                remaining_size = total_size - processed_size
+                estimated_remaining = remaining_size / processing_rate if processing_rate > 0 else 0
+                
+                # 转换为时分秒
+                hours = int(estimated_remaining // 3600)
+                minutes = int((estimated_remaining % 3600) // 60)
+                seconds = int(estimated_remaining % 60)
+                
+                # 格式化剩余时间
+                if hours > 0:
+                    remaining_time_str = f"{hours}小时{minutes}分钟{seconds}秒"
+                elif minutes > 0:
+                    remaining_time_str = f"{minutes}分钟{seconds}秒"
+                else:
+                    remaining_time_str = f"{seconds}秒"
+            else:
+                remaining_time_str = "计算中..."
+            
+            # 更新进度条，显示详细信息
+            pbar.set_postfix_str(f"已处理: {processed_files}/{total_files} | 照片: {processed_images}/{total_images} | 视频: {processed_videos}/{total_videos} | 预计剩余时间: {remaining_time_str}")
             pbar.update(1)
     
-    return total_files, processed_files, failed_files
+    return total_files, total_images, total_videos, processed_files, failed_files
 
 def main():
     """主函数"""
@@ -241,25 +309,27 @@ def main():
                 ext = os.path.splitext(file)[1].lower()
                 if ext in IMAGE_EXTS or ext in VIDEO_EXTS:
                     media_count += 1
-        print(f"\n输入目录统计：")
-        print(f"总文件数: {file_count}")
-        print(f"媒体文件数: {media_count}")
+        print("\n\033[1;32m输入目录统计：\033[0m")
+        print(f"\033[1;32m总文件数: {file_count}\033[0m")
+        print(f"\033[1;32m媒体文件数: {media_count}\033[0m")
     except Exception as e:
         print(f"错误：无法访问输入目录: {e}")
         sys.exit(1)
     
     # 显示目录信息
-    print(f"待处理：{args.input_dir}")
-    print(f"目标位置：{args.output_dir}")
-    print("请确认。")
+    print(f"\033[1;32m待处理：{args.input_dir}\033[0m")
+    print(f"\033[1;32m目标位置：{args.output_dir}\033[0m")
+    print("\033[1;32m请确认。\033[0m")
     
     # 检查输出目录
     output_dir_empty = True
     if os.path.exists(args.output_dir):
         if not is_empty_directory(args.output_dir):
             output_dir_empty = False
-            print("检测到输出目录不是空目录")
-            user_input = input("是否需要帮您清空输出目录？需要请输入yes，不需要请输入任意其他内容并回车: ")
+            print("\033[1;31m检测到输出目录不是空目录\033[0m")
+            # 使用红色粗体显示确认语句
+            print("\033[1;31m⚠️  注意：此操作将删除输出目录中的所有文件和子目录！\033[0m")
+            user_input = input("请确认是否清空输出目录？是请输入yes，否请输入任意字符: ")
             if user_input.lower() == 'yes':
                 # 清空输出目录
                 for root, dirs, files in os.walk(args.output_dir, topdown=False):
@@ -267,17 +337,17 @@ def main():
                         os.remove(os.path.join(root, file))
                     for dir in dirs:
                         os.rmdir(os.path.join(root, dir))
-                print("输出目录已清空")
+                print("\033[1;32m输出目录已清空\033[0m")
             else:
-                print("程序将中止")
+                print("\033[1;32m程序将中止\033[0m")
                 sys.exit(1)
     else:
         # 创建输出目录
         os.makedirs(args.output_dir, exist_ok=True)
-        print("检测到输出目录是新创建的空目录")
+        print("\033[1;34m检测到输出目录是新创建的空目录\033[0m")
     
     if output_dir_empty:
-        print("检测到输出目录是空目录")
+        print("\033[1;34m检测到输出目录是空目录\033[0m")
     
     # 二次确认：生成示例文件
     print(f"\n生成示例文件...")
@@ -319,8 +389,8 @@ def main():
     
     if sample_generated:
         print("\n已生成示例文件，请检查是否正确")
-        user_input = input("检查完后请输入yes开始处理所有照片，输入任意其他内容中止: ")
-        if user_input.lower() != 'yes':
+        user_input = input("检查完后请按Enter键开始处理所有文件，输入任意字符中止: ")
+        if user_input.strip() != '':
             print("程序将中止")
             sys.exit(1)
     else:
@@ -333,11 +403,13 @@ def main():
     print("将在示例文件的基础上继续处理剩余文件...")
     
     # 处理目录
-    total, processed, failed = process_directory(args.input_dir, args.output_dir)
+    total, total_images, total_videos, processed, failed = process_directory(args.input_dir, args.output_dir)
     
     # 输出结果
     print(f"\n处理完成！")
     print(f"总文件数: {total}")
+    print(f"照片数量: {total_images}")
+    print(f"视频数量: {total_videos}")
     print(f"成功处理: {processed}")
     print(f"处理失败: {failed}")
 
